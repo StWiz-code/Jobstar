@@ -1,0 +1,6 @@
+{
+  "name": "JobSTAR",
+  "description": "내 경험과 채용공고를 연결해, 문항별 맞춤 자기소개서를 STAR 구조로 완성해주는 AI 자소서 코파일럿",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
