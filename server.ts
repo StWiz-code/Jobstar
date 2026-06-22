@@ -21,6 +21,43 @@ function getGeminiClient() {
   });
 }
 
+const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function callWithRetry<T>(fn: () => Promise<T>, retries = 3, initialDelay = 500): Promise<T> {
+  let attempt = 0;
+  while (true) {
+    try {
+      return await fn();
+    } catch (error: any) {
+      attempt++;
+      
+      const errStr = String(error?.message || error).toLowerCase();
+      const status = error?.status || error?.statusCode || 0;
+      
+      const isRetryable =
+        status === 429 ||
+        status === 503 ||
+        errStr.includes("503") ||
+        errStr.includes("429") ||
+        errStr.includes("service_unavailable") ||
+        errStr.includes("resource_exhausted") ||
+        errStr.includes("timeout") ||
+        errStr.includes("time out") ||
+        errStr.includes("fetch") ||
+        errStr.includes("unavailable") ||
+        errStr.includes("overloaded");
+
+      if (attempt > retries || !isRetryable) {
+        throw error;
+      }
+
+      const waitTime = initialDelay * Math.pow(2, attempt - 1);
+      console.warn(`[Gemini API Warning] 호출 실패 (재시도 ${attempt}/${retries}). ${waitTime}ms 후 다시 시도합니다. 에러: ${error?.message || error}`);
+      await delay(waitTime);
+    }
+  }
+}
+
 async function startServer() {
   const app = express();
   const PORT = 3000;
@@ -84,64 +121,66 @@ ${jobPosting.rawText}
 5. 각 카드에 공고 적합 이유(fitReason)와 매칭 키워드를 명시한다.
 `;
 
-      const response = await ai.models.generateContent({
-        model: "gemini-3.5-flash",
-        contents: prompt,
-        config: {
-          responseMimeType: "application/json",
-          responseSchema: {
-            type: Type.ARRAY,
-            items: {
-              type: Type.OBJECT,
-              properties: {
-                experienceTitle: {
-                  type: Type.STRING,
-                  description: "어떤 경험 기반인지 작성 (예: 카페 아르바이트, 마케팅 공모전 등)"
+      const response = await callWithRetry(() =>
+        ai.models.generateContent({
+          model: "gemini-3.5-flash",
+          contents: prompt,
+          config: {
+            responseMimeType: "application/json",
+            responseSchema: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  experienceTitle: {
+                    type: Type.STRING,
+                    description: "어떤 경험 기반인지 작성 (예: 카페 아르바이트, 마케팅 공모전 등)"
+                  },
+                  fitScore: {
+                    type: Type.INTEGER,
+                    description: "0~100 공고 적합도 수치"
+                  },
+                  fitReason: {
+                    type: Type.STRING,
+                    description: "이 경험이 세부 공고의 어떤 점과 적합한지 한 문장으로 설명"
+                  },
+                  matchedKeywords: {
+                    type: Type.ARRAY,
+                    items: { type: Type.STRING },
+                    description: "채용 공고 키워드 중 이번 경험과 매칭된 것들"
+                  },
+                  situation: {
+                    type: Type.STRING,
+                    description: "Situation (상황): 수행 단체의 목표, 처했던 문제 상황 등"
+                  },
+                  task: {
+                    type: Type.STRING,
+                    description: "Task (과제): 본인에게 주어진 과업, 해결해야 하는 미션"
+                  },
+                  action: {
+                    type: Type.STRING,
+                    description: "Action (행동): 문제를 해결하기 위해 구체적으로 취한 행동과 노력"
+                  },
+                  result: {
+                    type: Type.STRING,
+                    description: "Result (결과): 행동의 성과, 배운 점, 수치적 성적"
+                  }
                 },
-                fitScore: {
-                  type: Type.INTEGER,
-                  description: "0~100 공고 적합도 수치"
-                },
-                fitReason: {
-                  type: Type.STRING,
-                  description: "이 경험이 세부 공고의 어떤 점과 적합한지 한 문장으로 설명"
-                },
-                matchedKeywords: {
-                  type: Type.ARRAY,
-                  items: { type: Type.STRING },
-                  description: "채용 공고 키워드 중 이번 경험과 매칭된 것들"
-                },
-                situation: {
-                  type: Type.STRING,
-                  description: "Situation (상황): 수행 단체의 목표, 처했던 문제 상황 등"
-                },
-                task: {
-                  type: Type.STRING,
-                  description: "Task (과제): 본인에게 주어진 과업, 해결해야 하는 미션"
-                },
-                action: {
-                  type: Type.STRING,
-                  description: "Action (행동): 문제를 해결하기 위해 구체적으로 취한 행동과 노력"
-                },
-                result: {
-                  type: Type.STRING,
-                  description: "Result (결과): 행동의 성과, 배운 점, 수치적 성적"
-                }
-              },
-              required: [
-                "experienceTitle",
-                "fitScore",
-                "fitReason",
-                "matchedKeywords",
-                "situation",
-                "task",
-                "action",
-                "result"
-              ]
+                required: [
+                  "experienceTitle",
+                  "fitScore",
+                  "fitReason",
+                  "matchedKeywords",
+                  "situation",
+                  "task",
+                  "action",
+                  "result"
+                ]
+              }
             }
           }
-        }
-      });
+        })
+      );
 
       const text = response.text || "[]";
       const cards = JSON.parse(text);
@@ -196,10 +235,12 @@ ${question.questionText}
 6. 다른 서론이나 따옴표, "안녕하세요", "이상입니다" 등 불필요한 언사 없이 자소서 본문 텍스트만 깔끔하게 출력해야 문맥이 잡힙니다. 제목이나 머리글도 금지합니다.
 `;
 
-      const response = await ai.models.generateContent({
-        model: "gemini-3.5-flash",
-        contents: prompt
-      });
+      const response = await callWithRetry(() =>
+        ai.models.generateContent({
+          model: "gemini-3.5-flash",
+          contents: prompt
+        })
+      );
 
       const bodyText = response.text || "";
       res.json({ content: bodyText.trim() });

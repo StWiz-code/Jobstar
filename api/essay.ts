@@ -15,6 +15,43 @@ function getGeminiClient() {
   });
 }
 
+const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function callWithRetry<T>(fn: () => Promise<T>, retries = 3, initialDelay = 500): Promise<T> {
+  let attempt = 0;
+  while (true) {
+    try {
+      return await fn();
+    } catch (error: any) {
+      attempt++;
+      
+      const errStr = String(error?.message || error).toLowerCase();
+      const status = error?.status || error?.statusCode || 0;
+      
+      const isRetryable =
+        status === 429 ||
+        status === 503 ||
+        errStr.includes("503") ||
+        errStr.includes("429") ||
+        errStr.includes("service_unavailable") ||
+        errStr.includes("resource_exhausted") ||
+        errStr.includes("timeout") ||
+        errStr.includes("time out") ||
+        errStr.includes("fetch") ||
+        errStr.includes("unavailable") ||
+        errStr.includes("overloaded");
+
+      if (attempt > retries || !isRetryable) {
+        throw error;
+      }
+
+      const waitTime = initialDelay * Math.pow(2, attempt - 1);
+      console.warn(`[Gemini API Warning] 호출 실패 (재시도 ${attempt}/${retries}). ${waitTime}ms 후 다시 시도합니다. 에러: ${error?.message || error}`);
+      await delay(waitTime);
+    }
+  }
+}
+
 export default async function handler(req: any, res: any) {
   // CORS Headers support
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -69,10 +106,12 @@ ${question.questionText}
 6. 다른 서론이나 따옴표, "안녕하세요", "이상입니다" 등 불필요한 언사 없이 자소서 본문 텍스트만 깔끔하게 출력해야 문맥이 잡힙니다. 제목이나 머리글도 금지합니다.
 `;
 
-    const response = await ai.models.generateContent({
-      model: "gemini-3.5-flash",
-      contents: prompt
-    });
+    const response = await callWithRetry(() =>
+      ai.models.generateContent({
+        model: "gemini-3.5-flash",
+        contents: prompt
+      })
+    );
 
     const bodyText = response.text || "";
     return res.status(200).json({ content: bodyText.trim() });
